@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grounded-graph"
-version = "0.1.0"
+version = "0.2.0"
 description = "Graph traversal and context queries over grounded-index metadata"
 license = { text = "GPL-3.0-only" }
 authors = [{ name = "Luiz Spies" }]
@@ -23,8 +23,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "grounded-index",
-    "sqlitegraph>=0.1.1",
+    "grounded-index>=0.2.0",
+    "sqlitegraph>=0.2.0",
 ]
 
 [project.optional-dependencies]
