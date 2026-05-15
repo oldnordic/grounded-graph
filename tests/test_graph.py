@@ -108,3 +108,61 @@ def test_stats() -> None:
     stats = g.stats()
     assert stats["nodes"] == 5
     assert stats["edges"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Multi-kind edges
+# ---------------------------------------------------------------------------
+
+
+def test_multiple_kinds_between_same_nodes_dont_clobber() -> None:
+    g = Graph()
+    g.add_node(GraphNode(id=1, kind="function", name="a", file_path="a.py"))
+    g.add_node(GraphNode(id=2, kind="function", name="b", file_path="b.py"))
+    g.add_edge(1, 2, "call")
+    g.add_edge(1, 2, "tests")
+
+    kinds = g.edge_kinds(1, 2)
+    assert {"call", "tests"} <= set(kinds)
+
+
+def test_neighbors_filter_by_edge_kinds() -> None:
+    g = Graph()
+    g.add_node(GraphNode(id=1, kind="function", name="a", file_path="a.py"))
+    g.add_node(GraphNode(id=2, kind="function", name="b", file_path="b.py"))
+    g.add_node(GraphNode(id=3, kind="function", name="c", file_path="c.py"))
+    g.add_edge(1, 2, "call")
+    g.add_edge(1, 3, "tests")
+
+    call_only = g.neighbors(1, direction="outgoing", edge_kinds={"call"})
+    assert set(call_only) == {2}
+
+    tests_only = g.neighbors(1, direction="outgoing", edge_kinds={"tests"})
+    assert set(tests_only) == {3}
+
+    union = g.neighbors(1, direction="outgoing", edge_kinds={"call", "tests"})
+    assert set(union) == {2, 3}
+
+
+def test_neighbors_unfiltered_includes_all_kinds() -> None:
+    g = Graph()
+    g.add_node(GraphNode(id=1, kind="function", name="a", file_path="a.py"))
+    g.add_node(GraphNode(id=2, kind="function", name="b", file_path="b.py"))
+    g.add_edge(1, 2, "call")
+    g.add_edge(1, 2, "tests")
+
+    assert set(g.neighbors(1, direction="outgoing")) == {2}
+
+
+def test_bfs_with_edge_kinds_filter() -> None:
+    g = Graph()
+    for nid in range(1, 5):
+        g.add_node(GraphNode(id=nid, kind="function", name=f"n{nid}", file_path="x.py"))
+    g.add_edge(1, 2, "call")
+    g.add_edge(2, 3, "call")
+    g.add_edge(1, 4, "imports")
+
+    reached = g.bfs(1, depth=10, direction="outgoing", edge_kinds={"call"})
+    assert 2 in reached
+    assert 3 in reached
+    assert 4 not in reached

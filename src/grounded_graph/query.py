@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from grounded_graph.graph import Graph, GraphNode
+from grounded_graph.graph import CALL_LIKE_KINDS, Graph, GraphNode
 
 
 class QueryEngine:
@@ -28,23 +28,37 @@ class QueryEngine:
         return result
 
     def callers(self, name: str) -> list[GraphNode]:
-        """Symbols that reference (call) the named symbol."""
+        """Symbols that call the named symbol (call-like edges only)."""
         node = self.find_symbol(name)
         if node is None:
             return []
-        caller_ids = self.graph.neighbors(node.id, direction="incoming")
+        caller_ids = self.graph.neighbors(
+            node.id, direction="incoming", edge_kinds=CALL_LIKE_KINDS
+        )
         return self._nodes_by_id(caller_ids)
 
     def callees(self, name: str) -> list[GraphNode]:
-        """Symbols that the named symbol references (calls)."""
+        """Symbols that the named symbol calls (call-like edges only)."""
         node = self.find_symbol(name)
         if node is None:
             return []
-        callee_ids = self.graph.neighbors(node.id, direction="outgoing")
+        callee_ids = self.graph.neighbors(
+            node.id, direction="outgoing", edge_kinds=CALL_LIKE_KINDS
+        )
         return self._nodes_by_id(callee_ids)
 
+    def tests_for(self, name: str) -> list[GraphNode]:
+        """Symbols that test the named symbol (`tests` edges, incoming)."""
+        node = self.find_symbol(name)
+        if node is None:
+            return []
+        test_ids = self.graph.neighbors(
+            node.id, direction="incoming", edge_kinds={"tests"}
+        )
+        return self._nodes_by_id(test_ids)
+
     def impact(self, name: str, depth: int = 3) -> list[GraphNode]:
-        """Forward reachable symbols — what this symbol affects."""
+        """Forward reachable symbols — what this symbol affects (call edges)."""
         node = self.find_symbol(name)
         if node is None:
             return []
@@ -52,7 +66,7 @@ class QueryEngine:
         return self._nodes_by_id(impacted_ids)
 
     def affected(self, name: str, depth: int = 3) -> list[GraphNode]:
-        """Backward reachable symbols — what affects this symbol."""
+        """Backward reachable symbols — what affects this symbol (call edges)."""
         node = self.find_symbol(name)
         if node is None:
             return []
@@ -97,10 +111,7 @@ class QueryEngine:
 
         budget_enforcer = BudgetEnforcer(max_tokens=budget)
 
-        # Get neighborhood
         hood = self.neighborhood(name, depth=depth)
-
-        # Priority: target first, then others
         target = node
         others = [n for n in hood if n.id != target.id]
 
@@ -123,23 +134,37 @@ class QueryEngine:
             }
             return budget_enforcer.add(item, source)  # type: ignore[no-any-return]
 
-        # Always include target
         _add_to_context(target, "target")
 
-        # Add neighbors if budget allows
         for n in others:
             if not budget_enforcer.can_fit(""):
                 break
-            # Determine role based on edge direction
-            if self.graph.has_edge(target.id, n.id):
-                role = "callee"
-            elif self.graph.has_edge(n.id, target.id):
-                role = "caller"
-            else:
-                role = "related"
+            role = self._role_for(target, n)
             _add_to_context(n, role)
 
         return budget_enforcer.items  # type: ignore[no-any-return]
+
+    def _role_for(self, target: GraphNode, other: GraphNode) -> str:
+        """Classify `other`'s relationship to `target` by edge kind."""
+        out_kinds = self.graph.edge_kinds(target.id, other.id)
+        in_kinds = self.graph.edge_kinds(other.id, target.id)
+        if out_kinds & CALL_LIKE_KINDS:
+            return "callee"
+        if in_kinds & CALL_LIKE_KINDS:
+            return "caller"
+        if "tests" in in_kinds:
+            return "tested-by"
+        if "tests" in out_kinds:
+            return "tests"
+        if "imports" in out_kinds:
+            return "imports"
+        if "imports" in in_kinds:
+            return "imported-by"
+        if "defines" in in_kinds:
+            return "defined-in"
+        if "defines" in out_kinds:
+            return "defines"
+        return "related"
 
     def stats(self) -> dict[str, int]:
         return self.graph.stats()

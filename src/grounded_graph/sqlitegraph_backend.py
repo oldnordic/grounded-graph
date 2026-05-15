@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -11,9 +12,25 @@ import sqlitegraph
 from grounded_index.budget import BudgetEnforcer  # type: ignore[import-untyped]
 
 from grounded_graph.embedder import Embedder, embedder_from_config
-from grounded_graph.graph import GraphNode
+from grounded_graph.graph import CALL_LIKE_KINDS, GraphNode
 
 HNSW_INDEX_NAME = "symbols"
+
+# Edge types we follow for call/impact-style queries. Mirrors the pure-Python
+# CALL_LIKE_KINDS — kept as a list so sqlitegraph's typed APIs can iterate.
+CALL_LIKE_EDGE_TYPES: tuple[str, ...] = tuple(sorted(CALL_LIKE_KINDS))
+
+
+def _strip_test_prefix(name: str) -> set[str]:
+    """Return candidate target-name strings stripped of common test prefixes."""
+    candidates: set[str] = set()
+    for prefix in ("test_", "tests_"):
+        if name.startswith(prefix):
+            candidates.add(name[len(prefix) :])
+    m = re.match(r"^(?P<stem>.+?)(Test|Tests|Spec)$", name)
+    if m:
+        candidates.add(m.group("stem"))
+    return candidates
 
 
 def _to_graphnode(node: dict[str, Any]) -> GraphNode:
@@ -113,22 +130,37 @@ class SqlitegraphBackend:
         g = self._g()
         conn = sqlite3.connect(str(index_db_path))
         try:
+            has_is_test = _has_is_test_column(conn)
             gi_to_sg: dict[int, int] = {}
             name_to_id: dict[str, int] = {}
+            is_test_by_gi: dict[int, bool] = {}
+            parent_by_gi: dict[int, int | None] = {}
 
-            cursor = conn.execute(
+            sym_query = (
                 """
                 SELECT s.id, s.name, s.kind, f.path,
                        s.line_start, s.line_end,
-                       s.signature, s.docstring, s.is_public
+                       s.signature, s.docstring, s.is_public,
+                       s.parent_id, s.is_test
+                FROM gi_symbols s
+                JOIN gi_files f ON s.file_id = f.id
+                """
+                if has_is_test
+                else """
+                SELECT s.id, s.name, s.kind, f.path,
+                       s.line_start, s.line_end,
+                       s.signature, s.docstring, s.is_public,
+                       s.parent_id, 0
                 FROM gi_symbols s
                 JOIN gi_files f ON s.file_id = f.id
                 """
             )
+            cursor = conn.execute(sym_query)
             for row in cursor.fetchall():
                 gi_id, name, kind, file_path = row[0], row[1], row[2], row[3]
                 line_start, line_end = row[4], row[5]
                 signature, docstring, is_public = row[6], row[7], row[8]
+                parent_id, is_test = row[9], bool(row[10])
                 data: dict[str, Any] = {
                     "file_path": file_path,
                     "line_start": line_start,
@@ -142,7 +174,11 @@ class SqlitegraphBackend:
                 sg_id = g.add_node(kind=kind, name=name, data=data)
                 gi_to_sg[gi_id] = sg_id
                 name_to_id[name] = sg_id
+                is_test_by_gi[gi_id] = is_test
+                parent_by_gi[gi_id] = parent_id
 
+            # Reference edges (preserve ref_kind) and track test→target sets.
+            test_target_pairs: list[tuple[int, int, str]] = []
             cursor = conn.execute(
                 "SELECT from_symbol_id, to_symbol_name, ref_kind FROM gi_references"
             )
@@ -151,6 +187,76 @@ class SqlitegraphBackend:
                 to_sg = name_to_id.get(to_name)
                 if from_sg is not None and to_sg is not None:
                     g.add_edge(from_sg, to_sg, ref_kind)
+                    if is_test_by_gi.get(from_gi_id):
+                        test_target_pairs.append((from_sg, to_sg, ref_kind))
+
+            # defines edges from parent_id.
+            for gi_id, parent_id in parent_by_gi.items():
+                if parent_id is None:
+                    continue
+                parent_sg = gi_to_sg.get(parent_id)
+                child_sg = gi_to_sg.get(gi_id)
+                if parent_sg is not None and child_sg is not None:
+                    g.add_edge(parent_sg, child_sg, "defines")
+
+            # imports edges: file → module nodes.
+            cursor = conn.execute("SELECT id, path FROM gi_files")
+            file_to_sg: dict[int, int] = {}
+            for file_id, path in cursor.fetchall():
+                file_sg = g.add_node(
+                    kind="file",
+                    name=path,
+                    data={"file_path": path},
+                )
+                file_to_sg[file_id] = file_sg
+
+            module_name_to_sg: dict[str, int] = {}
+            cursor = conn.execute("SELECT file_id, module_name FROM gi_imports")
+            for file_id, module_name in cursor.fetchall():
+                if file_id not in file_to_sg or not module_name:
+                    continue
+                mod_sg = module_name_to_sg.get(module_name)
+                if mod_sg is None:
+                    mod_sg = g.add_node(
+                        kind="module",
+                        name=module_name,
+                        data={"file_path": module_name},
+                    )
+                    module_name_to_sg[module_name] = mod_sg
+                g.add_edge(file_to_sg[file_id], mod_sg, "imports")
+
+            # tests edges:
+            # 1. From test symbols to call-like targets they reference.
+            for from_sg, to_sg, ref_kind in test_target_pairs:
+                if ref_kind not in CALL_LIKE_KINDS:
+                    continue
+                g.add_edge(from_sg, to_sg, "tests")
+
+            # 2. Name-convention matches.
+            for gi_id, is_test in is_test_by_gi.items():
+                if not is_test:
+                    continue
+                test_sg = gi_to_sg.get(gi_id)
+                if test_sg is None:
+                    continue
+                test_name = next(
+                    (name for name, nid in name_to_id.items() if nid == test_sg),
+                    None,
+                )
+                if test_name is None:
+                    continue
+                for stem in _strip_test_prefix(test_name):
+                    cand_sg = name_to_id.get(stem)
+                    if cand_sg is None or cand_sg == test_sg:
+                        continue
+                    # Find the corresponding gi_id to check is_test on the target.
+                    target_gi_id = next(
+                        (gid for gid, sid in gi_to_sg.items() if sid == cand_sg),
+                        None,
+                    )
+                    if target_gi_id is not None and is_test_by_gi.get(target_gi_id):
+                        continue
+                    g.add_edge(test_sg, cand_sg, "tests")
         finally:
             conn.close()
 
@@ -203,21 +309,55 @@ class SqlitegraphBackend:
         if sg_id is None:
             return []
         g = self._g()
-        return [_to_graphnode(g.get_node(cid)) for cid in g.neighbors(sg_id, direction="incoming")]
+        result: list[GraphNode] = []
+        seen: set[int] = set()
+        for kind in CALL_LIKE_EDGE_TYPES:
+            for cid in g.neighbors(sg_id, edge_type=kind, direction="incoming"):
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                result.append(_to_graphnode(g.get_node(cid)))
+        return result
 
     def callees(self, name: str) -> list[GraphNode]:
         sg_id = self._find_id(name)
         if sg_id is None:
             return []
         g = self._g()
-        return [_to_graphnode(g.get_node(cid)) for cid in g.neighbors(sg_id, direction="outgoing")]
+        result: list[GraphNode] = []
+        seen: set[int] = set()
+        for kind in CALL_LIKE_EDGE_TYPES:
+            for cid in g.neighbors(sg_id, edge_type=kind, direction="outgoing"):
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                result.append(_to_graphnode(g.get_node(cid)))
+        return result
+
+    def tests_for(self, name: str) -> list[GraphNode]:
+        sg_id = self._find_id(name)
+        if sg_id is None:
+            return []
+        g = self._g()
+        result: list[GraphNode] = []
+        for cid in g.neighbors(sg_id, edge_type="tests", direction="incoming"):
+            result.append(_to_graphnode(g.get_node(cid)))
+        return result
 
     def impact(self, name: str, depth: int = 3) -> list[GraphNode]:
         sg_id = self._find_id(name)
         if sg_id is None:
             return []
         g = self._g()
-        reached = [cid for cid in g.bfs(sg_id, depth=depth) if cid != sg_id]
+        reached: set[int] = set()
+        for kind in CALL_LIKE_EDGE_TYPES:
+            reached |= {
+                cid
+                for cid in g.bfs(
+                    sg_id, depth=depth, edge_types=[kind], direction="outgoing"
+                )
+                if cid != sg_id
+            }
         return [_to_graphnode(g.get_node(cid)) for cid in reached]
 
     def affected(self, name: str, depth: int = 3) -> list[GraphNode]:
@@ -225,19 +365,16 @@ class SqlitegraphBackend:
         if sg_id is None:
             return []
         g = self._g()
-        visited: set[int] = set()
-        frontier = {sg_id}
-        for _ in range(depth):
-            next_level: set[int] = set()
-            for cid in frontier:
-                for src in g.neighbors(cid, direction="incoming"):
-                    if src not in visited and src != sg_id:
-                        next_level.add(src)
-            visited |= next_level
-            frontier = next_level
-            if not frontier:
-                break
-        return [_to_graphnode(g.get_node(cid)) for cid in visited]
+        reached: set[int] = set()
+        for kind in CALL_LIKE_EDGE_TYPES:
+            reached |= {
+                cid
+                for cid in g.bfs(
+                    sg_id, depth=depth, edge_types=[kind], direction="incoming"
+                )
+                if cid != sg_id
+            }
+        return [_to_graphnode(g.get_node(cid)) for cid in reached]
 
     def path(self, from_name: str, to_name: str) -> list[GraphNode] | None:
         from_id = self._find_id(from_name)
@@ -349,3 +486,9 @@ class SqlitegraphBackend:
                 continue
             results.append((_to_graphnode(node_dict), float(distance)))
         return results
+
+
+def _has_is_test_column(conn: sqlite3.Connection) -> bool:
+    """Detect whether the connected DB has `gi_symbols.is_test` (schema v2)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(gi_symbols)").fetchall()}
+    return "is_test" in cols

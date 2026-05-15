@@ -120,3 +120,35 @@ def main():
     captured = capsys.readouterr()
     assert "main" in captured.out
     assert "hello" in captured.out
+
+
+def test_tests_for_command(tmp_path: Path, monkeypatch, capsys) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "lib.rs").write_text(
+        """pub fn add(a: i32, b: i32) -> i32 { a + b }
+
+#[cfg(test)]
+mod tests {
+    use super::add;
+
+    #[test]
+    fn test_add() {
+        let _ = add(1, 2);
+    }
+}
+"""
+    )
+
+    from grounded_index.indexer import Indexer
+
+    db_path = tmp_path / "index.db"
+    Indexer(root=tmp_path, db_path=db_path).index()
+
+    monkeypatch.chdir(tmp_path)
+    main(["--db", str(db_path), "index"])
+
+    code = main(["--db", str(db_path), "tests-for", "--symbol", "add"])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "test_add" in captured.out

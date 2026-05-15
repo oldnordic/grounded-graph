@@ -82,6 +82,11 @@ def _build_parser() -> argparse.ArgumentParser:
     hood_parser.add_argument("--depth", type=int, default=2, help="Hop depth")
     hood_parser.add_argument("--budget", type=int, default=4000, help="Token budget")
 
+    tests_for_parser = subparsers.add_parser(
+        "tests-for", help="Find tests that exercise the named symbol"
+    )
+    tests_for_parser.add_argument("--symbol", required=True, help="Target symbol name")
+
     sem_parser = subparsers.add_parser(
         "semantic", help="HNSW-backed semantic search (sqlitegraph backend only)"
     )
@@ -225,6 +230,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Symbol not found: {args.symbol}", file=sys.stderr)
             return 1
         print(formatter.format_context(items))
+        return 0
+
+    if args.command == "tests-for":
+        results = engine.tests_for(args.symbol)
+        if not results:
+            print(f"No tests found for: {args.symbol}", file=sys.stderr)
+            return 1
+        print(formatter.format_nodes(results))
         return 0
 
     if args.command == "semantic":
