@@ -102,69 +102,20 @@ class QueryEngine:
     def neighborhood_context(
         self, name: str, depth: int = 2, budget: int = 4000
     ) -> list[dict[str, Any]]:
-        """Token-bounded context pack for the neighborhood."""
-        from grounded_index.budget import BudgetEnforcer  # type: ignore[import-untyped]
+        """Token-bounded, priority-ranked context pack for the neighborhood.
+
+        Delegates to :mod:`grounded_graph.context` so both backends produce
+        the same shape — see ``rank_neighbors`` / ``pack_context``.
+        """
+        from grounded_graph.context import pack_context, rank_neighbors
 
         node = self.find_symbol(name)
         if node is None:
             return []
-
-        budget_enforcer = BudgetEnforcer(max_tokens=budget)
-
-        hood = self.neighborhood(name, depth=depth)
-        target = node
-        others = [n for n in hood if n.id != target.id]
-
-        def _add_to_context(n: GraphNode, role: str) -> bool:
-            try:
-                src_path = self.root_path / n.file_path
-                lines = src_path.read_text(encoding="utf-8").splitlines()
-                source = "\n".join(lines[n.line_start - 1 : n.line_end])
-            except Exception:
-                source = ""
-            item: dict[str, Any] = {
-                "role": role,
-                "symbol": n.name,
-                "kind": n.kind,
-                "file": n.file_path,
-                "lines": (n.line_start, n.line_end),
-                "source": source,
-                "signature": n.signature,
-                "docstring": n.docstring,
-            }
-            return budget_enforcer.add(item, source)  # type: ignore[no-any-return]
-
-        _add_to_context(target, "target")
-
-        for n in others:
-            if not budget_enforcer.can_fit(""):
-                break
-            role = self._role_for(target, n)
-            _add_to_context(n, role)
-
-        return budget_enforcer.items  # type: ignore[no-any-return]
-
-    def _role_for(self, target: GraphNode, other: GraphNode) -> str:
-        """Classify `other`'s relationship to `target` by edge kind."""
-        out_kinds = self.graph.edge_kinds(target.id, other.id)
-        in_kinds = self.graph.edge_kinds(other.id, target.id)
-        if out_kinds & CALL_LIKE_KINDS:
-            return "callee"
-        if in_kinds & CALL_LIKE_KINDS:
-            return "caller"
-        if "tests" in in_kinds:
-            return "tested-by"
-        if "tests" in out_kinds:
-            return "tests"
-        if "imports" in out_kinds:
-            return "imports"
-        if "imports" in in_kinds:
-            return "imported-by"
-        if "defines" in in_kinds:
-            return "defined-in"
-        if "defines" in out_kinds:
-            return "defines"
-        return "related"
+        ranked = rank_neighbors(self.graph, node.id, depth=depth)
+        return pack_context(
+            target=node, ranked=ranked, budget=budget, root_path=self.root_path
+        )
 
     def stats(self) -> dict[str, int]:
         return self.graph.stats()

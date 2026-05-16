@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 import sqlitegraph
-from grounded_index.budget import BudgetEnforcer  # type: ignore[import-untyped]
 
 from grounded_graph.embedder import Embedder, embedder_from_config
 from grounded_graph.graph import CALL_LIKE_KINDS, GraphNode
@@ -52,6 +52,40 @@ def _to_graphnode(node: dict[str, Any]) -> GraphNode:
 def _embedder_config_path(sg_db_path: Path) -> Path:
     """Sidecar file path that stores the embedder config for an sg DB."""
     return sg_db_path.with_name(sg_db_path.name + ".embedder.json")
+
+
+class _SqlitegraphNeighborsAdapter:
+    """Adapt sqlitegraph.Graph to the context.NeighborsProvider protocol.
+
+    `sqlitegraph.Graph.neighbors` takes a single `edge_type` and returns a
+    list[int]; the context module wants a set[int] returned from a single
+    call with a kind set. This adapter iterates the kinds and unions.
+    """
+
+    def __init__(self, g: sqlitegraph.Graph) -> None:
+        self._g = g
+
+    def neighbors(
+        self,
+        node_id: int,
+        direction: str = "outgoing",
+        edge_kinds: Iterable[str] | None = None,
+    ) -> set[int]:
+        if edge_kinds is None:
+            return set(self._g.neighbors(node_id, direction=direction))
+        result: set[int] = set()
+        for kind in edge_kinds:
+            result.update(self._g.neighbors(node_id, edge_type=kind, direction=direction))
+        return result
+
+    def get_node(self, node_id: int) -> GraphNode | None:
+        try:
+            node = self._g.get_node(node_id)
+        except Exception:
+            return None
+        if node is None:
+            return None
+        return _to_graphnode(node)
 
 
 class SqlitegraphBackend:
@@ -441,57 +475,17 @@ class SqlitegraphBackend:
         depth: int = 2,
         budget: int = 4000,
     ) -> list[dict[str, Any]]:
+        from grounded_graph.context import pack_context, rank_neighbors
+
         sg_id = self._find_id(name)
         if sg_id is None:
             return []
-        g = self._g()
-        budget_enforcer = BudgetEnforcer(max_tokens=budget)
-
-        out_ids = {cid for cid in g.bfs(sg_id, depth=depth) if cid != sg_id}
-        in_ids: set[int] = set()
-        frontier = {sg_id}
-        for _ in range(depth):
-            next_level: set[int] = set()
-            for cid in frontier:
-                for src in g.neighbors(cid, direction="incoming"):
-                    if src not in in_ids and src != sg_id:
-                        next_level.add(src)
-            in_ids |= next_level
-            frontier = next_level
-            if not frontier:
-                break
-
-        target = _to_graphnode(g.get_node(sg_id))
-
-        def _add(node: GraphNode, role: str) -> bool:
-            try:
-                src_path = self.root_path / node.file_path
-                lines = src_path.read_text(encoding="utf-8").splitlines()
-                source = "\n".join(lines[node.line_start - 1 : node.line_end])
-            except OSError:
-                source = ""
-            item: dict[str, Any] = {
-                "role": role,
-                "symbol": node.name,
-                "kind": node.kind,
-                "file": node.file_path,
-                "lines": (node.line_start, node.line_end),
-                "source": source,
-                "signature": node.signature,
-                "docstring": node.docstring,
-            }
-            return budget_enforcer.add(item, source)  # type: ignore[no-any-return]
-
-        _add(target, "target")
-
-        for cid in out_ids | in_ids:
-            if not budget_enforcer.can_fit(""):
-                break
-            node = _to_graphnode(g.get_node(cid))
-            role = "callee" if cid in out_ids else "caller" if cid in in_ids else "related"
-            _add(node, role)
-
-        return budget_enforcer.items  # type: ignore[no-any-return]
+        target = _to_graphnode(self._g().get_node(sg_id))
+        adapter = _SqlitegraphNeighborsAdapter(self._g())
+        ranked = rank_neighbors(adapter, target_id=sg_id, depth=depth)
+        return pack_context(
+            target=target, ranked=ranked, budget=budget, root_path=self.root_path
+        )
 
     def stats(self) -> dict[str, int]:
         g = self._g()
