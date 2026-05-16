@@ -1,5 +1,22 @@
 # grounded-graph Changelog
 
+## [0.4.0] - 2026-05-16
+
+### Added
+- **`grounded_graph.context` module** with `rank_neighbors(graph, target_id, depth)` and `pack_context(target, ranked, budget, root_path, head_lines=20)`.
+- **Priority tiers for neighborhood ordering**: target → direct callees → direct callers → tested-by → defined-in/defines → depth-2 call neighbors → imports/imported-by → related. Within each tier, neighbors are sorted by symbol id for stable output.
+- **Snippet-mode fallback** in pack_context: each item tries `full` → `head` (first 20 lines) → `signature-only`, in that order, until one fits the remaining budget. New `mode` field on every output item.
+- **`NeighborsProvider` Protocol** so both backends share the ranking implementation; `_SqlitegraphNeighborsAdapter` wraps `sqlitegraph.Graph` for the sqlitegraph backend.
+- **12 new pytest cases** in `tests/test_context_pack.py` covering priority ordering, stable-by-id within a tier, depth-2 ordering, snippet fallback modes, mode field presence.
+
+### Changed
+- **`QueryEngine.neighborhood_context`** and **`SqlitegraphBackend.neighborhood_context`** now delegate to the shared `rank_neighbors` + `pack_context` helpers. Backend parity: both produce the same `(role, mode)` shape for the same input (small loader-level differences in file/`contains` edges remain unchanged).
+- **`QueryEngine._role_for`** removed (logic now lives in `context.rank_neighbors`).
+
+### Notes
+- The previous `neighborhood_context` interleaved roles in set-iteration order. Output ordering is now deterministic; consumers that relied on the old order will need to update — but reliance was already unsafe.
+- File-line dedup (parent/child source overlap) is intentionally not done in this release; will be added if benchmarks show real duplication noise.
+
 ## [0.3.0] - 2026-05-16
 
 ### Changed
