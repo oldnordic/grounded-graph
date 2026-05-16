@@ -126,16 +126,18 @@ class SqlitegraphBackend:
         return self._graph
 
     def _load_from_index(self, index_db_path: Path) -> None:
-        """Populate the sqlitegraph DB from a grounded-index SQLite file."""
+        """Populate the sqlitegraph DB from a grounded-index SQLite file.
+
+        Uses sqlitegraph 0.3.0's bulk-insert API to batch all node and edge
+        inserts into two FFI calls per kind, closing the per-row FFI gap that
+        dominated the previous build time.
+        """
         g = self._g()
         conn = sqlite3.connect(str(index_db_path))
         try:
             has_is_test = _has_is_test_column(conn)
-            gi_to_sg: dict[int, int] = {}
-            name_to_id: dict[str, int] = {}
-            is_test_by_gi: dict[int, bool] = {}
-            parent_by_gi: dict[int, int | None] = {}
 
+            # ── Symbol nodes (one bulk insert) ──────────────────────
             sym_query = (
                 """
                 SELECT s.id, s.name, s.kind, f.path,
@@ -155,8 +157,15 @@ class SqlitegraphBackend:
                 JOIN gi_files f ON s.file_id = f.id
                 """
             )
-            cursor = conn.execute(sym_query)
-            for row in cursor.fetchall():
+            sym_rows = conn.execute(sym_query).fetchall()
+
+            sym_items: list[dict[str, Any]] = []
+            sym_gi_ids: list[int] = []
+            sym_names: list[str] = []
+            sym_is_test_flags: list[bool] = []
+            sym_parent_ids: list[int | None] = []
+
+            for row in sym_rows:
                 gi_id, name, kind, file_path = row[0], row[1], row[2], row[3]
                 line_start, line_end = row[4], row[5]
                 signature, docstring, is_public = row[6], row[7], row[8]
@@ -171,69 +180,103 @@ class SqlitegraphBackend:
                     data["signature"] = signature
                 if docstring:
                     data["docstring"] = docstring
-                sg_id = g.add_node(kind=kind, name=name, data=data)
-                gi_to_sg[gi_id] = sg_id
-                name_to_id[name] = sg_id
-                is_test_by_gi[gi_id] = is_test
-                parent_by_gi[gi_id] = parent_id
+                sym_items.append({"kind": kind, "name": name, "data": data})
+                sym_gi_ids.append(gi_id)
+                sym_names.append(name)
+                sym_is_test_flags.append(is_test)
+                sym_parent_ids.append(parent_id)
 
-            # Reference edges (preserve ref_kind) and track test→target sets.
+            sym_sg_ids = g.add_nodes_bulk(sym_items)
+            gi_to_sg = dict(zip(sym_gi_ids, sym_sg_ids, strict=True))
+            name_to_id = dict(zip(sym_names, sym_sg_ids, strict=True))
+            is_test_by_gi = dict(zip(sym_gi_ids, sym_is_test_flags, strict=True))
+
+            # ── File nodes (one bulk insert) ────────────────────────
+            file_rows = conn.execute("SELECT id, path FROM gi_files").fetchall()
+            file_items = [
+                {"kind": "file", "name": path, "data": {"file_path": path}}
+                for _, path in file_rows
+            ]
+            file_sg_ids = g.add_nodes_bulk(file_items) if file_items else []
+            file_to_sg = dict(zip((fid for fid, _ in file_rows), file_sg_ids, strict=True))
+
+            # ── Module nodes (one bulk insert) ──────────────────────
+            import_rows = conn.execute(
+                "SELECT file_id, module_name FROM gi_imports"
+            ).fetchall()
+            unique_modules: list[str] = []
+            seen_modules: set[str] = set()
+            for _, module_name in import_rows:
+                if module_name and module_name not in seen_modules:
+                    unique_modules.append(module_name)
+                    seen_modules.add(module_name)
+            mod_items = [
+                {"kind": "module", "name": mn, "data": {"file_path": mn}}
+                for mn in unique_modules
+            ]
+            mod_sg_ids = g.add_nodes_bulk(mod_items) if mod_items else []
+            module_name_to_sg = dict(zip(unique_modules, mod_sg_ids, strict=True))
+
+            # ── Collect all edges into one bulk insert ──────────────
+            edge_items: list[dict[str, Any]] = []
             test_target_pairs: list[tuple[int, int, str]] = []
-            cursor = conn.execute(
+
+            # Reference edges from gi_references.
+            ref_rows = conn.execute(
                 "SELECT from_symbol_id, to_symbol_name, ref_kind FROM gi_references"
-            )
-            for from_gi_id, to_name, ref_kind in cursor.fetchall():
+            ).fetchall()
+            for from_gi_id, to_name, ref_kind in ref_rows:
                 from_sg = gi_to_sg.get(from_gi_id)
                 to_sg = name_to_id.get(to_name)
-                if from_sg is not None and to_sg is not None:
-                    g.add_edge(from_sg, to_sg, ref_kind)
-                    if is_test_by_gi.get(from_gi_id):
-                        test_target_pairs.append((from_sg, to_sg, ref_kind))
+                if from_sg is None or to_sg is None:
+                    continue
+                edge_items.append(
+                    {"from_id": from_sg, "to_id": to_sg, "edge_type": ref_kind}
+                )
+                if is_test_by_gi.get(from_gi_id):
+                    test_target_pairs.append((from_sg, to_sg, ref_kind))
 
             # defines edges from parent_id.
-            for gi_id, parent_id in parent_by_gi.items():
+            for gi_id, parent_id in zip(sym_gi_ids, sym_parent_ids, strict=True):
                 if parent_id is None:
                     continue
                 parent_sg = gi_to_sg.get(parent_id)
                 child_sg = gi_to_sg.get(gi_id)
                 if parent_sg is not None and child_sg is not None:
-                    g.add_edge(parent_sg, child_sg, "defines")
+                    edge_items.append(
+                        {
+                            "from_id": parent_sg,
+                            "to_id": child_sg,
+                            "edge_type": "defines",
+                        }
+                    )
 
             # imports edges: file → module nodes.
-            cursor = conn.execute("SELECT id, path FROM gi_files")
-            file_to_sg: dict[int, int] = {}
-            for file_id, path in cursor.fetchall():
-                file_sg = g.add_node(
-                    kind="file",
-                    name=path,
-                    data={"file_path": path},
-                )
-                file_to_sg[file_id] = file_sg
-
-            module_name_to_sg: dict[str, int] = {}
-            cursor = conn.execute("SELECT file_id, module_name FROM gi_imports")
-            for file_id, module_name in cursor.fetchall():
+            for file_id, module_name in import_rows:
                 if file_id not in file_to_sg or not module_name:
                     continue
                 mod_sg = module_name_to_sg.get(module_name)
                 if mod_sg is None:
-                    mod_sg = g.add_node(
-                        kind="module",
-                        name=module_name,
-                        data={"file_path": module_name},
-                    )
-                    module_name_to_sg[module_name] = mod_sg
-                g.add_edge(file_to_sg[file_id], mod_sg, "imports")
+                    continue
+                edge_items.append(
+                    {
+                        "from_id": file_to_sg[file_id],
+                        "to_id": mod_sg,
+                        "edge_type": "imports",
+                    }
+                )
 
-            # tests edges:
-            # 1. From test symbols to call-like targets they reference.
+            # tests edges: from test symbols to call-like reference targets.
             for from_sg, to_sg, ref_kind in test_target_pairs:
                 if ref_kind not in CALL_LIKE_KINDS:
                     continue
-                g.add_edge(from_sg, to_sg, "tests")
+                edge_items.append(
+                    {"from_id": from_sg, "to_id": to_sg, "edge_type": "tests"}
+                )
 
-            # 2. Name-convention matches.
-            for gi_id, is_test in is_test_by_gi.items():
+            # tests edges: name-convention matches (test_foo → foo).
+            sg_to_gi = {sg: gi for gi, sg in gi_to_sg.items()}
+            for gi_id, is_test in zip(sym_gi_ids, sym_is_test_flags, strict=True):
                 if not is_test:
                     continue
                 test_sg = gi_to_sg.get(gi_id)
@@ -249,14 +292,19 @@ class SqlitegraphBackend:
                     cand_sg = name_to_id.get(stem)
                     if cand_sg is None or cand_sg == test_sg:
                         continue
-                    # Find the corresponding gi_id to check is_test on the target.
-                    target_gi_id = next(
-                        (gid for gid, sid in gi_to_sg.items() if sid == cand_sg),
-                        None,
-                    )
+                    target_gi_id = sg_to_gi.get(cand_sg)
                     if target_gi_id is not None and is_test_by_gi.get(target_gi_id):
                         continue
-                    g.add_edge(test_sg, cand_sg, "tests")
+                    edge_items.append(
+                        {
+                            "from_id": test_sg,
+                            "to_id": cand_sg,
+                            "edge_type": "tests",
+                        }
+                    )
+
+            if edge_items:
+                g.add_edges_bulk(edge_items)
         finally:
             conn.close()
 

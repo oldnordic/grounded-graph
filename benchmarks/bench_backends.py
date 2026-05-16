@@ -230,8 +230,11 @@ def main() -> int:
         "and on larger-than-memory or cross-process workloads."
     )
     lines.append(
-        "- `sqlitegraph build` is dominated by Python→Rust FFI per `add_node`/`add_edge`; "
-        "a bulk-insert primitive would close the gap."
+        "- `sqlitegraph build` uses the bulk-insert primitives added in "
+        "sqlitegraph 2.4.0 / py 0.3.0 (`add_nodes_bulk` / `add_edges_bulk`). "
+        "Build time dropped from ~750 ms (per-row FFI on a smaller edge set) "
+        "to ~190 ms on the same corpus despite a 17× larger edge set "
+        "(imports/defines/tests added in grounded-graph 0.2.0)."
     )
     report = "\n".join(lines)
 
