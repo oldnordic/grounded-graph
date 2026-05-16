@@ -1,5 +1,20 @@
 # grounded-graph Changelog
 
+## [0.3.0] - 2026-05-16
+
+### Changed
+- **`SqlitegraphBackend._load_from_index` uses bulk-insert** (`add_nodes_bulk` / `add_edges_bulk` from sqlitegraph 0.3.0). Three batched node inserts (symbols, files, modules) followed by a single batched edge insert that carries references, defines, imports, and tests edges together.
+
+### Benchmark (`benchmarks/RESULTS.md`)
+- 14008 symbols / 6640 sg edges on the `sqlitegraph` repo:
+  - **`sqlitegraph build`: ~750 ms → ~190 ms** (3.9× faster) despite a **17× larger edge set** (imports/defines/tests added in 0.2.0).
+  - Pure-Python build moved from 93 ms to 117 ms (same edge growth).
+  - Query latency unchanged; the gap there is dict-lookup vs SQL round-trip, not FFI.
+
+### Dependencies
+- `sqlitegraph>=0.3.0` (was 0.2.0) — required for `add_nodes_bulk` / `add_edges_bulk`.
+- `grounded-index>=0.2.0` (unchanged).
+
 ## [0.2.0] - 2026-05-16
 
 ### Added
