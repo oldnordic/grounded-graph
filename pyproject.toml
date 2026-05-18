@@ -63,3 +63,7 @@ warn_unused_ignores = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = "sqlitegraph._native"
+ignore_missing_imports = true

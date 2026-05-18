@@ -222,7 +222,7 @@ class SqlitegraphBackend:
                 sym_is_test_flags.append(is_test)
                 sym_parent_ids.append(parent_id)
 
-            sym_sg_ids = g.add_nodes_bulk(sym_items)
+            sym_sg_ids = g.add_nodes_bulk(sym_items)  # type: ignore[attr-defined]
             gi_to_sg = dict(zip(sym_gi_ids, sym_sg_ids, strict=True))
             name_to_id = dict(zip(sym_names, sym_sg_ids, strict=True))
             is_test_by_gi = dict(zip(sym_gi_ids, sym_is_test_flags, strict=True))
@@ -232,7 +232,7 @@ class SqlitegraphBackend:
             file_items = [
                 {"kind": "file", "name": path, "data": {"file_path": path}} for _, path in file_rows
             ]
-            file_sg_ids = g.add_nodes_bulk(file_items) if file_items else []
+            file_sg_ids = g.add_nodes_bulk(file_items) if file_items else []  # type: ignore[attr-defined]
             file_to_sg = dict(zip((fid for fid, _ in file_rows), file_sg_ids, strict=True))
 
             # ── Module nodes (one bulk insert) ──────────────────────
@@ -246,7 +246,7 @@ class SqlitegraphBackend:
             mod_items = [
                 {"kind": "module", "name": mn, "data": {"file_path": mn}} for mn in unique_modules
             ]
-            mod_sg_ids = g.add_nodes_bulk(mod_items) if mod_items else []
+            mod_sg_ids = g.add_nodes_bulk(mod_items) if mod_items else []  # type: ignore[attr-defined]
             module_name_to_sg = dict(zip(unique_modules, mod_sg_ids, strict=True))
 
             # ── Collect all edges into one bulk insert ──────────────
@@ -332,7 +332,7 @@ class SqlitegraphBackend:
                     )
 
             if edge_items:
-                g.add_edges_bulk(edge_items)
+                g.add_edges_bulk(edge_items)  # type: ignore[attr-defined]
         finally:
             conn.close()
 
@@ -429,7 +429,7 @@ class SqlitegraphBackend:
         for kind in CALL_LIKE_EDGE_TYPES:
             reached |= {
                 cid
-                for cid in g.bfs(sg_id, depth=depth, edge_types=[kind], direction="outgoing")
+                for cid in g.bfs(sg_id, depth=depth, edge_types=[kind], direction="outgoing")  # type: ignore[call-arg]
                 if cid != sg_id
             }
         return [_to_graphnode(g.get_node(cid)) for cid in reached]
@@ -443,7 +443,7 @@ class SqlitegraphBackend:
         for kind in CALL_LIKE_EDGE_TYPES:
             reached |= {
                 cid
-                for cid in g.bfs(sg_id, depth=depth, edge_types=[kind], direction="incoming")
+                for cid in g.bfs(sg_id, depth=depth, edge_types=[kind], direction="incoming")  # type: ignore[call-arg]
                 if cid != sg_id
             }
         return [_to_graphnode(g.get_node(cid)) for cid in reached]

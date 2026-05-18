@@ -112,7 +112,7 @@ class Graph:
             return set(candidates)
 
         allowed = set(edge_kinds)
-        return {nid for nid in candidates if self._edge_kinds.get(key(nid), set()) & allowed}
+        return {nid for nid in candidates if self._edge_kinds.get(key(nid), set()) & allowed}  # type: ignore[no-untyped-call]
 
     def bfs(
         self,
