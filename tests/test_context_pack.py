@@ -203,9 +203,7 @@ def test_pack_context_skips_below_signature_budget(tmp_path: Path) -> None:
 def test_pack_context_walks_ranked_in_order(tmp_path: Path) -> None:
     src = tmp_path / "x.py"
     src.write_text("def a(): pass\ndef b(): pass\ndef c(): pass\n")
-    target = GraphNode(
-        id=1, kind="function", name="a", file_path="x.py", line_start=1, line_end=1
-    )
+    target = GraphNode(id=1, kind="function", name="a", file_path="x.py", line_start=1, line_end=1)
     b = GraphNode(id=2, kind="function", name="b", file_path="x.py", line_start=2, line_end=2)
     c = GraphNode(id=3, kind="function", name="c", file_path="x.py", line_start=3, line_end=3)
 
@@ -222,8 +220,6 @@ def test_pack_context_walks_ranked_in_order(tmp_path: Path) -> None:
 def test_pack_context_includes_mode_field(tmp_path: Path) -> None:
     src = tmp_path / "x.py"
     src.write_text("def a(): pass\n")
-    target = GraphNode(
-        id=1, kind="function", name="a", file_path="x.py", line_start=1, line_end=1
-    )
+    target = GraphNode(id=1, kind="function", name="a", file_path="x.py", line_start=1, line_end=1)
     items = pack_context(target=target, ranked=[], budget=4000, root_path=tmp_path)
     assert "mode" in items[0]

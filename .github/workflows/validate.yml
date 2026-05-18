@@ -1,0 +1,69 @@
+name: Validate
+
+# Security review:
+#   Only trusted inputs (branch names from `on:` config) are referenced.
+#   No untrusted user-supplied fields (issue titles, PR bodies, commit messages)
+#   are interpolated into run: blocks.
+#
+# Scope: this workflow gates public-facing documentation. Python source and
+# tests are covered by .github/workflows/python.yml.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check public docs for AI/LLM terminology
+        run: |
+          echo "Checking public docs for AI/LLM terminology..."
+          if grep -riE "\bLLM\b|\bAI assistant\b|production-ready" \
+              README.md MANUAL.md API.md CHANGELOG.md 2>/dev/null; then
+            echo "FAIL: AI/LLM terminology found in public documentation"
+            echo "       This is a code intelligence tool, not an AI product"
+            echo "       Internal docs / source-code comments are fine"
+            exit 1
+          fi
+          echo "No AI/LLM terminology in public docs"
+
+      - name: Check license is GPL-3.0-only
+        run: |
+          echo "Checking license declaration..."
+          if grep -q 'GPL-3.0-or-later' pyproject.toml; then
+            echo "FAIL: pyproject.toml must declare GPL-3.0-only, not GPL-3.0-or-later"
+            exit 1
+          fi
+          if ! grep -q 'GPL-3.0-only' pyproject.toml; then
+            echo "FAIL: pyproject.toml is missing a GPL-3.0-only license declaration"
+            exit 1
+          fi
+          echo "License is GPL-3.0-only"
+
+      - name: Check public docs for exaggerated claims
+        run: |
+          echo "Checking public docs for exaggerated claims..."
+          if grep -ri 'production-ready' README.md MANUAL.md API.md CHANGELOG.md 2>/dev/null; then
+            echo "FAIL: No software is production-ready; use 'stable' instead"
+            exit 1
+          fi
+          echo "No exaggerated claims in public docs"
+
+      - name: Check version consistency
+        run: |
+          echo "Checking that README badge and pyproject.toml versions agree..."
+          pyproject_version=$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "([^"]+)"/\1/')
+          if ! grep -q "version-${pyproject_version}-blue" README.md; then
+            echo "FAIL: README.md badge does not match pyproject.toml version (${pyproject_version})"
+            exit 1
+          fi
+          echo "Versions agree: ${pyproject_version}"

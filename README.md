@@ -1,46 +1,53 @@
 # grounded-graph
 
-`grounded-graph` is a planned embedded code metadata graph for helping AI coding agents navigate repositories through evidence instead of broad file reads.
+Graph traversal and context queries over code metadata. `grounded-graph` reads a
+[`grounded-index`](https://github.com/oldnordic/grounded-index) SQLite database
+and exposes call graphs, impact analysis, test discovery, and token-bounded
+context packs for AI coding agents.
 
-## Goal
+Two storage backends:
 
-Build a project-scoped graph database that captures symbols, files, modules, calls, references, tests, and dependency relationships. The first version should be deterministic, offline, read-only by default, and suitable for restricted corporate environments.
+- **Pure-Python** (`--backend python`) — fast in-memory, no extra dependencies.
+- **sqlitegraph** (`--backend sqlitegraph`) — file-backed Rust graph with HNSW
+  semantic search and persistent indexes.
 
-## First Principles
-
-- Repository evidence is the source of truth.
-- No network access by default.
-- No model calls in the core graph engine.
-- Store metadata in an embedded database.
-- Return token-bounded Markdown or JSON context for AI assistants.
-- Prefer explicit graph edges over inferred explanations.
-
-## Initial Scope
-
-- Index project files into graph nodes and edges.
-- Store metadata in SQLite.
-- Query symbol neighborhoods with depth and token limits.
-- Find callers, references, related tests, and impact paths.
-- Export compact context blocks for Copilot, Claude, ChatGPT, or Codex.
-
-## Out Of Scope Initially
-
-- Automated code mutation.
-- Refactoring edits.
-- LLM-powered ranking.
-- Network services.
-- IDE plugin work.
-
-## Candidate Commands
+## Quick start
 
 ```bash
-grounded-graph index .
-grounded-graph status
-grounded-graph find-symbol CustomerService
-grounded-graph context CustomerService --budget 4000
-grounded-graph callers CustomerService.updateCustomer
-grounded-graph tests-for CustomerService
-grounded-graph impact src/main/java/example/CustomerService.java
-grounded-graph neighborhood CustomerService --depth 2 --budget 6000
+# 1. Index your project (produces .grounded-index.db)
+grounded-index index .
+
+# 2. Load the graph and check stats
+grounded-graph index --backend python
+
+# 3. Query
+grounded-graph callers --symbol my_function
+grounded-graph tests-for --symbol CustomerService
+grounded-graph neighborhood --symbol my_function --depth 2 --budget 4000
 ```
 
+## What it does
+
+| Capability | Description |
+|------------|-------------|
+| **Call graph** | `callers`, `callees`, `impact`, `affected` with kind-filtered traversal |
+| **Test mapping** | `tests-for` links tests to the symbols they exercise |
+| **Shortest path** | `path --from A --to B` between any two symbols |
+| **Context packs** | `neighborhood` returns priority-ranked, token-bounded symbol context |
+| **Semantic search** | HNSW-backed similarity search over symbol embeddings (sqlitegraph only) |
+| **Multi-kind edges** | Same node pair can carry `call`, `defines`, `imports`, and `tests` edges |
+
+See [MANUAL.md](MANUAL.md) for full CLI documentation and [API.md](API.md) for the
+Python API.
+
+## Install
+
+```bash
+pip install grounded-graph
+```
+
+Requires Python >= 3.10.
+
+## Version
+
+Current version: **0.4.1**

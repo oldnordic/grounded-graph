@@ -32,9 +32,7 @@ class QueryEngine:
         node = self.find_symbol(name)
         if node is None:
             return []
-        caller_ids = self.graph.neighbors(
-            node.id, direction="incoming", edge_kinds=CALL_LIKE_KINDS
-        )
+        caller_ids = self.graph.neighbors(node.id, direction="incoming", edge_kinds=CALL_LIKE_KINDS)
         return self._nodes_by_id(caller_ids)
 
     def callees(self, name: str) -> list[GraphNode]:
@@ -42,9 +40,7 @@ class QueryEngine:
         node = self.find_symbol(name)
         if node is None:
             return []
-        callee_ids = self.graph.neighbors(
-            node.id, direction="outgoing", edge_kinds=CALL_LIKE_KINDS
-        )
+        callee_ids = self.graph.neighbors(node.id, direction="outgoing", edge_kinds=CALL_LIKE_KINDS)
         return self._nodes_by_id(callee_ids)
 
     def tests_for(self, name: str) -> list[GraphNode]:
@@ -52,9 +48,7 @@ class QueryEngine:
         node = self.find_symbol(name)
         if node is None:
             return []
-        test_ids = self.graph.neighbors(
-            node.id, direction="incoming", edge_kinds={"tests"}
-        )
+        test_ids = self.graph.neighbors(node.id, direction="incoming", edge_kinds={"tests"})
         return self._nodes_by_id(test_ids)
 
     def impact(self, name: str, depth: int = 3) -> list[GraphNode]:
@@ -113,9 +107,7 @@ class QueryEngine:
         if node is None:
             return []
         ranked = rank_neighbors(self.graph, node.id, depth=depth)
-        return pack_context(
-            target=node, ranked=ranked, budget=budget, root_path=self.root_path
-        )
+        return pack_context(target=node, ranked=ranked, budget=budget, root_path=self.root_path)
 
     def stats(self) -> dict[str, int]:
         return self.graph.stats()

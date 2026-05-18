@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grounded-graph"
-version = "0.4.0"
+version = "0.4.1"
 description = "Graph traversal and context queries over grounded-index metadata"
 license = { text = "GPL-3.0-only" }
 authors = [{ name = "Luiz Spies" }]
@@ -23,9 +23,15 @@ classifiers = [
 ]
 
 dependencies = [
-    "grounded-index>=0.2.0",
+    "grounded-index>=0.4.0",
     "sqlitegraph>=0.3.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/oldnordic/grounded-graph"
+Repository = "https://github.com/oldnordic/grounded-graph"
+"Bug Tracker" = "https://github.com/oldnordic/grounded-graph/issues"
+Changelog = "https://github.com/oldnordic/grounded-graph/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]

@@ -152,3 +152,25 @@ mod tests {
     assert code == 0
     captured = capsys.readouterr()
     assert "test_add" in captured.out
+
+
+def test_version_matches_package(capsys) -> None:
+    """`--version` and `__version__` should track pyproject.toml — no hardcoded literals."""
+    import sys
+
+    if sys.version_info < (3, 11):
+        pytest.skip("tomllib requires Python 3.11+")
+    import tomllib
+
+    from grounded_graph import __version__
+
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    with pyproject.open("rb") as f:
+        expected = tomllib.load(f)["project"]["version"]
+    assert __version__ == expected, "__version__ must match pyproject.toml [project].version"
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--version"])
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert expected in captured.out

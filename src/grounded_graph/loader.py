@@ -8,7 +8,6 @@ from pathlib import Path
 
 from grounded_graph.graph import CALL_LIKE_KINDS, Graph, GraphNode
 
-
 # Module node IDs are negative and offset to avoid colliding with file nodes
 # (also negative) and symbol nodes (positive). File ids start at 1 in
 # grounded-index; module ids are assigned starting at MODULE_ID_BASE.
@@ -57,6 +56,8 @@ def load_from_index(db_path: Path | str) -> Graph:
     name_to_ids: dict[str, list[int]] = {}
     for row in cursor.fetchall():
         sid, name = row[0], row[1]
+        if not name or not name.strip():
+            continue  # skip parser artifacts
         graph.add_node(
             GraphNode(
                 id=sid,
@@ -104,6 +105,8 @@ def load_from_index(db_path: Path | str) -> Graph:
         "SELECT from_symbol_id, to_symbol_name, ref_kind, line FROM gi_references"
     )
     for from_id, to_name, kind, line in cursor.fetchall():
+        if not to_name or not to_name.strip():
+            continue  # skip references to parser artifacts
         to_node = graph.find_by_name(to_name)
         if to_node is None:
             continue
@@ -113,7 +116,7 @@ def load_from_index(db_path: Path | str) -> Graph:
 
     # ── `defines` edges from parent_id ──────────────────────────────
     for sym_id, parent_id in parent_map.items():
-        if parent_id is not None and parent_id in graph._nodes:  # noqa: SLF001
+        if parent_id is not None and parent_id in graph._nodes:
             graph.add_edge(parent_id, sym_id, "defines")
 
     # ── `imports` edges from gi_imports (file → module node) ────────
@@ -121,7 +124,7 @@ def load_from_index(db_path: Path | str) -> Graph:
     next_module_id = MODULE_ID_BASE
     cursor = conn.execute("SELECT file_id, module_name, imported_name, line FROM gi_imports")
     for file_id, module_name, _imported_name, line in cursor.fetchall():
-        if file_id not in file_id_map or not module_name:
+        if file_id not in file_id_map or not module_name or not module_name.strip():
             continue
         if module_name not in module_name_to_id:
             module_name_to_id[module_name] = next_module_id

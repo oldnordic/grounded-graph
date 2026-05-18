@@ -124,11 +124,7 @@ def main():
     assert len(module_nodes) >= 1, "expected at least one module node from imports"
 
     # And imports edges from the file node to the modules
-    imports_edges = [
-        (frm, to)
-        for frm, to, kind in graph.all_edges()
-        if kind == "imports"
-    ]
+    imports_edges = [(frm, to) for frm, to, kind in graph.all_edges() if kind == "imports"]
     assert len(imports_edges) >= 1, "expected at least one imports edge"
 
 
@@ -140,7 +136,6 @@ def test_load_creates_defines_edges(tmp_path: Path) -> None:
     this test exercises the loader path with a hand-built fixture instead of
     relying on the indexer.
     """
-    import sqlite3
 
     db_path = tmp_path / "index.db"
     # Bootstrap a fresh DB via the public path, then poke a parent_id link
@@ -210,3 +205,70 @@ mod tests {
         for frm, to, kind in graph.all_edges()
     )
     assert has_tests_edge, "expected a tests edge from test_add to add"
+
+
+def test_load_skips_empty_and_whitespace_names(tmp_path: Path) -> None:
+    """Symbols with empty or whitespace-only names are parser artifacts and
+    must not be added to the graph.  References that target empty names must
+    not create false edges.
+    """
+    db_path = tmp_path / "index.db"
+    from grounded_index.db import open_db
+
+    conn = open_db(db_path)
+    conn.execute(
+        "INSERT INTO gi_files (path, language, content_hash, line_count) "
+        "VALUES ('src/main.py', 'python', 'abc', 10)"
+    )
+    # Real symbol
+    conn.execute(
+        "INSERT INTO gi_symbols (id, file_id, name, kind, line_start, line_end) "
+        "VALUES (1, 1, 'main', 'function', 1, 5)"
+    )
+    # Empty-name symbol (parser artifact)
+    conn.execute(
+        "INSERT INTO gi_symbols (id, file_id, name, kind, line_start, line_end) "
+        "VALUES (2, 1, '', 'function', 7, 9)"
+    )
+    # Whitespace-only name (parser artifact)
+    conn.execute(
+        "INSERT INTO gi_symbols (id, file_id, name, kind, line_start, line_end) "
+        "VALUES (3, 1, '   ', 'method', 10, 12)"
+    )
+    # Reference from main to empty target (parser artifact)
+    conn.execute(
+        "INSERT INTO gi_references (from_symbol_id, to_symbol_name, ref_kind, line) "
+        "VALUES (1, '', 'call', 3)"
+    )
+    # Reference from main to whitespace target (parser artifact)
+    conn.execute(
+        "INSERT INTO gi_references (from_symbol_id, to_symbol_name, ref_kind, line) "
+        "VALUES (1, '  ', 'call', 4)"
+    )
+    # Valid reference from main to something real
+    conn.execute(
+        "INSERT INTO gi_symbols (id, file_id, name, kind, line_start, line_end) "
+        "VALUES (4, 1, 'helper', 'function', 14, 16)"
+    )
+    conn.execute(
+        "INSERT INTO gi_references (from_symbol_id, to_symbol_name, ref_kind, line) "
+        "VALUES (1, 'helper', 'call', 2)"
+    )
+    conn.close()
+
+    graph = load_from_index(db_path)
+
+    # Only main and helper should exist; empty/whitespace symbols are skipped
+    names = {n.name for n in graph.all_nodes() if n.kind == "function" or n.kind == "method"}
+    assert names == {"main", "helper"}, f"unexpected names in graph: {names}"
+
+    # Only the valid reference edge should exist
+    main_node = graph.find_by_name("main")
+    assert main_node is not None
+    helper_node = graph.find_by_name("helper")
+    assert helper_node is not None
+    assert graph.has_edge(main_node.id, helper_node.id), "valid edge missing"
+
+    # No false edges from main to garbage nodes
+    all_neighbors = graph.neighbors(main_node.id, direction="outgoing")
+    assert all_neighbors == {helper_node.id}, f"unexpected neighbors: {all_neighbors}"

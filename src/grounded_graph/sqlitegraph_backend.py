@@ -201,6 +201,8 @@ class SqlitegraphBackend:
 
             for row in sym_rows:
                 gi_id, name, kind, file_path = row[0], row[1], row[2], row[3]
+                if not name or not name.strip():
+                    continue  # skip symbols with empty/whitespace names (parser artifact)
                 line_start, line_end = row[4], row[5]
                 signature, docstring, is_public = row[6], row[7], row[8]
                 parent_id, is_test = row[9], bool(row[10])
@@ -228,25 +230,21 @@ class SqlitegraphBackend:
             # ── File nodes (one bulk insert) ────────────────────────
             file_rows = conn.execute("SELECT id, path FROM gi_files").fetchall()
             file_items = [
-                {"kind": "file", "name": path, "data": {"file_path": path}}
-                for _, path in file_rows
+                {"kind": "file", "name": path, "data": {"file_path": path}} for _, path in file_rows
             ]
             file_sg_ids = g.add_nodes_bulk(file_items) if file_items else []
             file_to_sg = dict(zip((fid for fid, _ in file_rows), file_sg_ids, strict=True))
 
             # ── Module nodes (one bulk insert) ──────────────────────
-            import_rows = conn.execute(
-                "SELECT file_id, module_name FROM gi_imports"
-            ).fetchall()
+            import_rows = conn.execute("SELECT file_id, module_name FROM gi_imports").fetchall()
             unique_modules: list[str] = []
             seen_modules: set[str] = set()
             for _, module_name in import_rows:
-                if module_name and module_name not in seen_modules:
+                if module_name and module_name.strip() and module_name not in seen_modules:
                     unique_modules.append(module_name)
                     seen_modules.add(module_name)
             mod_items = [
-                {"kind": "module", "name": mn, "data": {"file_path": mn}}
-                for mn in unique_modules
+                {"kind": "module", "name": mn, "data": {"file_path": mn}} for mn in unique_modules
             ]
             mod_sg_ids = g.add_nodes_bulk(mod_items) if mod_items else []
             module_name_to_sg = dict(zip(unique_modules, mod_sg_ids, strict=True))
@@ -264,9 +262,7 @@ class SqlitegraphBackend:
                 to_sg = name_to_id.get(to_name)
                 if from_sg is None or to_sg is None:
                     continue
-                edge_items.append(
-                    {"from_id": from_sg, "to_id": to_sg, "edge_type": ref_kind}
-                )
+                edge_items.append({"from_id": from_sg, "to_id": to_sg, "edge_type": ref_kind})
                 if is_test_by_gi.get(from_gi_id):
                     test_target_pairs.append((from_sg, to_sg, ref_kind))
 
@@ -304,9 +300,7 @@ class SqlitegraphBackend:
             for from_sg, to_sg, ref_kind in test_target_pairs:
                 if ref_kind not in CALL_LIKE_KINDS:
                     continue
-                edge_items.append(
-                    {"from_id": from_sg, "to_id": to_sg, "edge_type": "tests"}
-                )
+                edge_items.append({"from_id": from_sg, "to_id": to_sg, "edge_type": "tests"})
 
             # tests edges: name-convention matches (test_foo → foo).
             sg_to_gi = {sg: gi for gi, sg in gi_to_sg.items()}
@@ -435,9 +429,7 @@ class SqlitegraphBackend:
         for kind in CALL_LIKE_EDGE_TYPES:
             reached |= {
                 cid
-                for cid in g.bfs(
-                    sg_id, depth=depth, edge_types=[kind], direction="outgoing"
-                )
+                for cid in g.bfs(sg_id, depth=depth, edge_types=[kind], direction="outgoing")
                 if cid != sg_id
             }
         return [_to_graphnode(g.get_node(cid)) for cid in reached]
@@ -451,9 +443,7 @@ class SqlitegraphBackend:
         for kind in CALL_LIKE_EDGE_TYPES:
             reached |= {
                 cid
-                for cid in g.bfs(
-                    sg_id, depth=depth, edge_types=[kind], direction="incoming"
-                )
+                for cid in g.bfs(sg_id, depth=depth, edge_types=[kind], direction="incoming")
                 if cid != sg_id
             }
         return [_to_graphnode(g.get_node(cid)) for cid in reached]
@@ -483,9 +473,7 @@ class SqlitegraphBackend:
         target = _to_graphnode(self._g().get_node(sg_id))
         adapter = _SqlitegraphNeighborsAdapter(self._g())
         ranked = rank_neighbors(adapter, target_id=sg_id, depth=depth)
-        return pack_context(
-            target=target, ranked=ranked, budget=budget, root_path=self.root_path
-        )
+        return pack_context(target=target, ranked=ranked, budget=budget, root_path=self.root_path)
 
     def stats(self) -> dict[str, int]:
         g = self._g()

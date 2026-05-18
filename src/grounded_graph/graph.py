@@ -6,7 +6,6 @@ from collections import deque
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
-
 # ── Edge kinds ───────────────────────────────────────────────────────
 #
 # Kinds carried on edges. Callers/callees/impact/affected traversal should

@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from grounded_graph import __version__
 from grounded_graph.embedder import Embedder, HashEmbedder, OllamaEmbedder
 from grounded_graph.formatters import get_formatter
 from grounded_graph.loader import load_from_index
@@ -21,7 +22,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="grounded-graph",
         description="Graph traversal and context queries over code metadata.",
     )
-    parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "--db", "-d", default=".grounded-index.db", help="Path to grounded-index database"
     )
