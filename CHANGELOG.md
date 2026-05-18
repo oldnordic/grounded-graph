@@ -6,7 +6,7 @@
 - **Documentation overhaul**: added `API.md` (full Python API reference with code examples) and `MANUAL.md` (complete CLI reference with global options, all subcommands, examples).
 - **`pyproject.toml` metadata**: added `[project.urls]` (Homepage, Repository, Bug Tracker, Changelog).
 - **`__init__.py` re-exports**: top-level imports for `Graph`, `GraphNode`, `GraphEdge`, `QueryEngine`, `NeighborsProvider`, `Embedder`, `HashEmbedder`, `OllamaEmbedder`, `CALL_LIKE_KINDS`.
-- Bumped minimum `grounded-index` dependency to `>=0.4.0` (uses `BudgetEnforcer` introduced in that version).
+- Bumped minimum `grounded-index` dependency to `>=0.5.0` (uses `BudgetEnforcer` introduced in that version).
 
 ### Fixed
 - Code formatting pass on `query.py`, `sqlitegraph_backend.py`, `test_context_pack.py`, `test_loader.py` (ruff format).

@@ -166,8 +166,8 @@ Machine-readable JSON array. Each item includes all fields (`role`, `symbol`,
 
 ### `markdown`
 
-Markdown-formatted code blocks with symbol headers. Good for pasting into LLM
-prompts.
+Markdown-formatted code blocks with symbol headers. Good for pasting into
+code review prompts.
 
 ## Typical workflows
 

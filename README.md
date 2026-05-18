@@ -1,5 +1,7 @@
 # grounded-graph
 
+![version](https://img.shields.io/badge/version-0.4.1-blue)
+
 Graph traversal and context queries over code metadata. `grounded-graph` reads a
 [`grounded-index`](https://github.com/oldnordic/grounded-index) SQLite database
 and exposes call graphs, impact analysis, test discovery, and token-bounded
